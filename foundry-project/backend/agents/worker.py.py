@@ -1,5 +1,5 @@
-from openai import AsyncOpenAI
-from src.git_manager import GitTransactionManager
+from tools.sandbox_async import AsyncDockerSandbox
+from tools.git import GitTransactionManager
 
 client = AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="local")
 sandbox = AsyncDockerSandbox("./workspace")
