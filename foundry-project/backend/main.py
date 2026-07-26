@@ -1,3 +1,5 @@
+import asyncio
+
 async def main():
     # 1. Initialize core system
     sandbox.start()
