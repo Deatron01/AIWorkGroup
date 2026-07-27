@@ -1,5 +1,6 @@
 import docker
 import os
+import asyncio # Added missing import
 
 class AsyncDockerSandbox:
     def __init__(self, workspace_path: str, image: str = "python:3.11-slim"):
