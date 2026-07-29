@@ -1,3 +1,9 @@
+import os
+import ast
+
+# Ensure these globals are explicitly defined or injected from the main config
+WORKSPACE_DIR = "./workspace"
+
 def tool_search_codebase(query: str, n_results: int = 3) -> str:
     """Semantic search to find relevant code without knowing the filename."""
     results = indexer.collection.query(

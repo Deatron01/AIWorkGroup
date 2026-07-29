@@ -1,9 +1,10 @@
 import docker
 import os
-import asyncio # Added missing import
+import asyncio
 
 class AsyncDockerSandbox:
-    def __init__(self, workspace_path: str, image: str = "python:3.11-slim"):
+    # Updated default image to the custom testing container
+    def __init__(self, workspace_path: str, image: str = "mimir-tester:latest"):
         self.client = docker.from_env()
         self.workspace_path = os.path.abspath(workspace_path)
         self.image = image
@@ -15,6 +16,12 @@ class AsyncDockerSandbox:
         try:
             self.client.images.get(self.image)
         except docker.errors.ImageNotFound:
+            # Prevent Docker SDK from trying to pull a local image from the web
+            if "mimir-tester" in self.image:
+                raise RuntimeError(
+                    f"Local image '{self.image}' not found! "
+                    "Run 'docker build -t mimir-tester:latest .' first."
+                )
             self.client.images.pull(self.image)
 
     def start(self):
@@ -27,7 +34,7 @@ class AsyncDockerSandbox:
             auto_remove=True
         )
 
-    async def execute(self, cmd: str) -> str:
+    async def execute(self, cmd: str, workdir: str = None) -> str:
         """Executes safely without blocking the main async event loop."""
         if not self.container:
             return "Error: Sandbox down."
@@ -40,6 +47,7 @@ class AsyncDockerSandbox:
     def _sync_execute(self, cmd: str) -> str:
         exit_code, output = self.container.exec_run(["/bin/bash", "-c", cmd], workdir="/workspace")
         result = output.decode("utf-8").strip()
+        # Note: We will look for "Failed" in the Supervisor to detect errors
         return result if exit_code == 0 else f"Failed (Code {exit_code}):\n{result}"
 
     def stop(self):

@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from core.event_bus import EventBus
-# Assuming ConnectionManager is in your websocket.py file:
 from api.websocket import ConnectionManager
+
 class UIBroadcaster:
     def __init__(self, bus: EventBus, manager: ConnectionManager):
         self.bus = bus

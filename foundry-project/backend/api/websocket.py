@@ -1,8 +1,9 @@
 import asyncio
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-import uvicorn
 from typing import List, Any, Dict
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from core.hitl_manager import hitl_manager
 
 app = FastAPI()
 
@@ -16,7 +17,8 @@ class ConnectionManager:
         print("[Gateway] Frontend connected to UI socket.")
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
     async def broadcast(self, message_type: str, payload: Dict[str, Any]):
         """Serializes and pushes data to all connected UIs."""
@@ -28,7 +30,6 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except RuntimeError:
-                # Handle dropped connections gracefully
                 pass
 
 manager = ConnectionManager()
@@ -38,7 +39,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Listen for messages from the Tauri React App
             raw_data = await websocket.receive_text()
             data = json.loads(raw_data)
             

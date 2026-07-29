@@ -37,6 +37,7 @@ class CodeIndexer:
             pass # Handle non-python or malformed files gracefully
         return chunks
 
+    # Fixed file reading in Source 12
     def index_workspace(self):
         """Scans the workspace and builds the vector index."""
         print("[Indexer] Scanning workspace...")
@@ -47,7 +48,7 @@ class CodeIndexer:
                     rel_path = os.path.relpath(filepath, self.workspace_path)
                     
                     with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.content()
+                        content = f.read() # FIXED: Changed from f.content()
                         
                     chunks = self.extract_functions_and_classes(rel_path, content)
                     

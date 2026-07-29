@@ -1,79 +1,61 @@
-def run_orchestrated_pipeline(user_goal: str):
-    print("=== Starting Foundry Phase 3: Orchestration ===")
-    sandbox.start()
-    
-    try:
-        boss = BossAgent()
-        plan = boss.plan(user_goal)
-        
-        completed_tasks = set()
-        task_dict = {t.task_id: t for t in plan.tasks}
-        
-        # Keep looping until all tasks are in the completed set
-        while len(completed_tasks) < len(plan.tasks):
-            # Find all tasks whose dependencies are fully met AND aren't completed yet
-            ready_tasks = [
-                task for task in plan.tasks 
-                if task.task_id not in completed_tasks 
-                and all(dep in completed_tasks for dep in task.dependencies)
-            ]
-            
-            if not ready_tasks:
-                raise RuntimeError("Deadlock detected: No tasks ready but plan is incomplete. Check DAG logic.")
+from typing import Dict, Any, Set
+from core.schemas import TaskGraph, TaskNode
+from core.event_bus import EventBus
+from typing import Dict, Union, Any
 
-            # In Phase 3, we execute sequentially. 
-            # (In Phase 4, we will dispatch these ready_tasks to an async event bus for parallel execution).
-            for task in ready_tasks:
-                print(f"\n>>> [Orchestrator] Starting Task: {task.task_id} ({task.role})")
-                print(f">>> Description: {task.description}")
-                
-                # Setup specialized worker based on the role the Boss assigned
-                worker_prompt = f"You are a senior {task.role}. Write complete, well-commented code/text. When editing existing files, you MUST use the `edit_file` tool.Follow these strict rules for {edit_file}:1. Your `search_block` must be an EXACT match to the existing file. Do not skip lines or alter indentation.2. If you are changing a single line inside a loop or function, include the `def` or `for` line in your `search_block` to ensure the block is unique.3. If the tool returns an error stating the block is not found, use `tool_read_file_chunk` to read the exact lines from the file, then try again."
-                worker = LocalAgent(name=f"Worker-{task.task_id}", system_prompt=worker_prompt, tools=TOOLS)
-                
-                # Reuse the Phase 2 Supervisor logic
-                supervisor = LocalAgent(
-                    name="Supervisor",
-                    system_prompt=(
-                        "You are a strict QA Supervisor. Test the code provided to you using execute_bash. "
-                        "If it meets the requirements, reply with 'VERIFICATION_PASSED'. "
-                        "If it fails, reply with 'VERIFICATION_FAILED' followed by details."
-                    ),
-                    tools=TOOLS
-                )
-                
-                # Execute the Task Loop (Worker writes -> Supervisor checks)
-                execute_task_loop(worker, supervisor, task.description)
-                
-                # Mark as complete to unblock downstream dependencies
-                completed_tasks.add(task.task_id)
-                print(f"\n✅ Task {task.task_id} fully verified and completed!")
-
-        print(f"\n🎉 Project '{plan.project_name}' completed successfully!")
+class DAGTracker:
+    """Listens to task completions and emits 'task.ready' for unblocked nodes."""
+    def __init__(self, plan: Union[dict, Any], bus):
+        self.bus = bus
+        self.completed_tasks = set()
+        self.failed_tasks = set()
+        self.dispatched_tasks = set()
+        self.plan = plan
         
-    finally:
-        sandbox.stop()
-
-def execute_task_loop(worker: LocalAgent, supervisor: LocalAgent, task_description: str, max_retries: int = 3):
-    """The Phase 2 retry loop, extracted into a standalone function."""
-    attempt = 1
-    current_prompt = task_description
-    
-    while attempt <= max_retries:
-        print(f"\n--- ATTEMPT {attempt}/{max_retries} ---")
-        worker.chat(current_prompt)
-        
-        supervisor_prompt = (
-            f"The worker just attempted: '{task_description}'. "
-            "Please verify their work using your execute_bash tool."
-        )
-        verdict = supervisor.chat(supervisor_prompt)
-        
-        if "VERIFICATION_PASSED" in verdict.upper():
-            return True
+        # 1. Safely extract tasks array whether `plan` is a dict or Pydantic object
+        if isinstance(plan, dict):
+            raw_tasks = plan.get("tasks", [])
         else:
-            print("\n❌ Verification failed. Reworking...")
-            current_prompt = f"Your previous attempt failed. Supervisor feedback: {verdict}\nFix the issues."
-            attempt += 1
+            raw_tasks = getattr(plan, "tasks", [])
+
+        # 2. Build pending_tasks dictionary safely
+        self.pending_tasks: Dict[str, Any] = {}
+        for task in raw_tasks:
+            if isinstance(task, dict):
+                task_id = task.get("task_id")
+                # If you have a TaskNode Pydantic model, instantiate it:
+                # self.pending_tasks[task_id] = TaskNode(**task)
+                self.pending_tasks[task_id] = task
+            else:
+                self.pending_tasks[task.task_id] = task
+
+        print(f"[DAGTracker] Loaded {len(self.pending_tasks)} tasks into execution graph.")
+
+    async def handle_task_completed(self, payload: Dict[str, Any]):
+        task_id = payload["task_id"]
+        self.completed_tasks.add(task_id)
+        if task_id in self.pending_tasks:
+            del self.pending_tasks[task_id]
+        
+        print(f"\n[DAG Tracker] Task {task_id} completed. Checking dependencies...")
+        await self.evaluate_graph()
+
+    async def evaluate_graph(self):
+        if not self.pending_tasks:
+            print("\n[DAG Tracker] All tasks complete!")
+            # Safely handle self.plan whether it is a dictionary or an object
+            project_name = self.plan.get("project_name", "Unknown") if isinstance(self.plan, dict) else getattr(self.plan, "project_name", "Unknown")
+            await self.bus.publish("plan.completed", {"project_name": project_name})
+            return
+
+        for task_id, task in list(self.pending_tasks.items()):
+            # Safely extract dependencies whether task is a dict or an object
+            deps = task.get("dependencies", []) if isinstance(task, dict) else getattr(task, "dependencies", [])
             
-    raise RuntimeError("Task failed after maximum retries. Human intervention required.")
+            # If all dependencies are in the completed set, fire it off
+            if all(dep in self.completed_tasks for dep in deps):
+                # Check our local set instead of modifying the Pydantic object
+                if task_id not in self.dispatched_tasks:
+                    self.dispatched_tasks.add(task_id)
+                    print(f"[DAG Tracker] Dispatching ready task: {task_id}")
+                    await self.bus.publish("task.ready", {"task": task})

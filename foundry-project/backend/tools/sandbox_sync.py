@@ -2,7 +2,7 @@ import docker
 import os
 
 class DockerSandbox:
-    def __init__(self, workspace_path: str, image: str = "python:3.11-slim"):
+    def __init__(self, workspace_path: str, image: str = "tester:latest"):
         self.client = docker.from_env()
         self.workspace_path = os.path.abspath(workspace_path)
         self.image = image
@@ -10,10 +10,16 @@ class DockerSandbox:
         self._ensure_image()
 
     def _ensure_image(self):
-        """Pulls the Docker image if it doesn't exist locally."""
+        """Checks if the image exists locally before trying to pull."""
         try:
             self.client.images.get(self.image)
         except docker.errors.ImageNotFound:
+            # If it's your local custom image, don't attempt to pull from Docker Hub
+            if "mimir-tester" in self.image:
+                raise RuntimeError(
+                    f"Local image '{self.image}' not found! "
+                    "Run 'docker build -t tester:latest .' in your terminal first."
+                )
             print(f"Pulling sandbox image {self.image}... This might take a minute.")
             self.client.images.pull(self.image)
 
