@@ -1,115 +1,129 @@
+# foundry-project/backend/main.py
 import asyncio
 import uvicorn
 from pydantic import BaseModel
 from openai import AsyncOpenAI
+
+# Core Framework
 from tools.sandbox_async import AsyncDockerSandbox
-from core.event_bus import EventBus
+from tools.model_manager import ModelManager, BOSS_MODEL, WORKER_MODEL, SUPERVISOR_MODEL
+from core.event_bus import bus # Global singleton bus
+from core.dag_tracker import dag_tracker
+
+# UI Bridge & API
 from api.ui_bridge import UIBroadcaster
 from api.websocket import manager, app
-from core.dag_tracker import DAGTracker
-from agents.boss import BossPlanner
-from agents.worker import AsyncWorkerNode 
-from agents.supervisor import Supervisor
+
+# Agents (Importing them triggers their __init__ to subscribe to the Event Bus)
+from agents.boss import boss_node
+from agents.function_designer import function_designer_node
+from agents.worker import worker_node
+from agents.unit_tester import unit_tester_node
+from agents.supervisor import supervisor_node
+from agents.integrator import integrator_node
+
 from startup import ensure_models_loaded
-from tools.model_manager import ModelManager
 
-ollama_client = AsyncOpenAI(
-    base_url="http://127.0.0.1:11434/v1",
-    api_key="ollama"
-)
+from core.database import init_db
+from core.metrics_collector import metrics_collector
 
-BOSS_MODEL = "llama3.1:70b-instruct-q2_K" 
-WORKER_MODEL = "qwen2.5-coder:14b-instruct-q8_0"
-SUPERVISOR_MODEL = "gemma2:27b"
-model_manager = ModelManager()
-
-# Initialize globals
+# Initialize Sandbox and Model Manager
 sandbox = AsyncDockerSandbox("./workspace")
-bus = EventBus()
+model_manager = ModelManager()
 
 # Define the expected JSON payload format
 class ProjectRequest(BaseModel):
     goal: str
 
+# -------------------------------------------------------------------
+# VRAM Management Hooks (Event-Driven)
+# -------------------------------------------------------------------
+async def load_supervisor_vram(event):
+    """Triggered when Boss finishes. Swaps Llama 3.1 70B for Gemma 2 27B."""
+    print("\n[VRAM Manager] Architecture Approved. Swapping Boss -> Supervisor...")
+    await model_manager.switch_models(
+        model_to_unload=BOSS_MODEL, 
+        model_to_load=SUPERVISOR_MODEL
+    )
+
+async def load_worker_vram(event):
+    """Triggered when Function Designer finishes. Swaps Gemma 2 27B for Qwen Code 14B."""
+    print("\n[VRAM Manager] Contracts Ready. Swapping Supervisor -> Worker (The Forge)...")
+    await model_manager.switch_models(
+        model_to_unload=SUPERVISOR_MODEL, 
+        model_to_load=WORKER_MODEL
+    )
+
+# Bind VRAM swaps to the cascade of events
+bus.subscribe("Architecture_Approved", load_supervisor_vram)
+bus.subscribe("Function_Contracts_Ready", load_worker_vram)
+
+
+# -------------------------------------------------------------------
+# API Endpoints
+# -------------------------------------------------------------------
 @app.post("/api/start-project")
 async def start_project(request: ProjectRequest):
-    print(f"\n Received new project goal: {request.goal}")
+    print(f"\n[API] Received new project goal: {request.goal}")
     
-    # 1. Swapping VRAM: Ensure Worker is unloaded, Boss is preloaded
+    # 1. Swapping VRAM: Ensure Worker is unloaded, Boss is preloaded for initialization
     await model_manager.switch_models(
         model_to_unload=WORKER_MODEL, 
         model_to_load=BOSS_MODEL
     )
     
-    # 2. Run the async 3-Phase Boss Planner
-    boss = BossPlanner(llm_client=ollama_client, model_name=BOSS_MODEL)
-    plan_result = await boss.plan_project(request.goal)
+    # 2. Kick off the asynchronous pipeline by feeding the Boss
+    # The Boss will emit "Architecture_Approved" when done, cascading through the system.
+    asyncio.create_task(boss_node.initialize_project(request.goal))
     
-    dag = plan_result["dag"]
-    
-    # Broadcast DAG to WebSockets UI
-    await manager.broadcast("DAG_INIT", dag)
-    
-    # 3. Swapping VRAM: Drop Boss from VRAM and Load Worker for execution loop
-    await model_manager.switch_models(
-        model_to_unload=BOSS_MODEL, 
-        model_to_load=WORKER_MODEL
-    )
-    
-    # 4. Initialize tracker and start event bus processing
-    tracker = DAGTracker(dag, bus)
-    bus.subscribe("task.completed", tracker.handle_task_completed)
-    
-    await tracker.evaluate_graph()
+    # Broadcast status to WebSockets UI immediately so the user isn't waiting on the HTTP request
+    await manager.broadcast("SYSTEM_STATUS", {"status": "Boss Agent Analyzing Requirements"})
     
     return {
         "status": "started", 
-        "project_name": dag.get("project_name", "Mimir Project"), 
-        "task_count": len(dag.get("tasks", []))
+        "project_name": "Project Mimir AI Factory", 
+        "message": "Pipeline initialized. Event cascade started."
     }
 
-
+# -------------------------------------------------------------------
+# Main Bootstrapper
+# -------------------------------------------------------------------
 async def main():
     # 0. Run the pre-flight checks and download missing models
     await ensure_models_loaded()
     
-    # 1. Initialize core system
-    print("Starting Docker sandbox environment...")
+    # 0. Initialize Database & Tables
+    init_db()
+    print("[System] Database initialized successfully.")
+    
+    # 1. Start background metrics collector loop
+    asyncio.create_task(metrics_collector.start())
+    
+    # 1. Initialize core system (Docker Sandbox)
+    print("\n[System] Starting Docker sandbox environment...")
     sandbox.start()
+    
+    # (Note: Agent singletons are already loaded in memory via imports and bound to the bus)
     
     # 2. Attach the UI Bridge
     broadcaster = UIBroadcaster(bus, manager)
     
-    # 3. Initialize the Supervisor using the sandbox
-    # We pass None for the worker initially to avoid circular imports, 
-    # then assign it right after.
-    supervisor_node = Supervisor(sandbox=sandbox, worker_agent=None)
-    
-    # 4. Initialize Worker Pool, pass in the supervisor, and subscribe
-    worker_pool = AsyncWorkerNode(bus)
-    worker_pool.supervisor = supervisor_node
-    supervisor_node.worker = worker_pool # Complete the two-way link
-    
-    bus.subscribe("task.ready", worker_pool.handle_ready_task)
-    
-    # 5. Start the Event Bus background task
-    bus_task = asyncio.create_task(bus.run())
-    
-    # 6. Start the FastAPI server using Uvicorn programmatically
+    # 3. Start the FastAPI server using Uvicorn programmatically
     config = uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="warning")
     server = uvicorn.Server(config)
     
-    print("Backend Running on ws://127.0.0.1:8000/ws/ui")
-    print("API ready at http://127.0.0.1:8000/api/start-project")
+    print("\n=======================================================")
+    print(" Project Mimir AI Factory Backend Running")
+    print(" UI WebSockets: ws://127.0.0.1:8000/ws/ui")
+    print(" API Endpoint:  http://127.0.0.1:8000/api/start-project")
+    print("=======================================================\n")
     
     try:
         await server.serve()
     finally:
         # Graceful shutdown
-        print("\nShutting down sandbox and event bus...")
+        print("\n[System] Shutting down sandbox and releasing resources...")
         sandbox.stop()
-        bus_task.cancel()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

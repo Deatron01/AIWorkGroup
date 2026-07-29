@@ -1,13 +1,40 @@
-import json
-from typing import List, Literal
+# foundry-project/backend/core/schemas.py
 from pydantic import BaseModel, Field
+from typing import List, Optional, Dict
 
-class TaskNode(BaseModel):
-    task_id: str = Field(..., description="Unique alphanumeric ID for this task (e.g., 'task_1')")
-    description: str = Field(..., description="Highly detailed instruction for the worker")
-    role: Literal["programmer", "tester", "architect"] = Field(..., description="The specialist needed")
-    dependencies: List[str] = Field(default_factory=list, description="List of task_ids that must be completed before this task starts")
+class FunctionContract(BaseModel):
+    """Emitted by the Function Designer. Dictates exactly what the Worker must build."""
+    function_name: str = Field(..., description="Exact name of the function to be generated.")
+    purpose: str = Field(..., description="Short explanation of what the function does.")
+    parameters: Dict[str, str] = Field(..., description="Key-value mapping of parameter names to their data types.")
+    return_type: str = Field(..., description="The exact return type of the function.")
+    exceptions_raised: List[str] = Field(default_factory=list, description="Any exceptions this function is allowed to throw.")
+    side_effects: str = Field(..., description="Allowed state mutations. Must be 'None' if purely functional.")
+    thread_safety: str = Field(..., description="Requirement for concurrency (e.g., 'Requires Mutex', 'Stateless').")
+    time_complexity_expectation: str = Field(..., description="Expected Big-O time complexity.")
 
-class TaskGraph(BaseModel):
+class ComponentScope(BaseModel):
+    """Emitted by the Component Planner. Contains multiple function contracts."""
+    component_name: str
+    description: str
+    dependencies: List[str]
+    functions: List[FunctionContract]
+
+class ImplementationResult(BaseModel):
+    """Emitted by the Worker AI after attempting to satisfy a FunctionContract."""
+    function_name: str
+    source_code: str = Field(..., description="The raw, unescaped code string.")
+    imports_required: List[str] = Field(..., description="List of exact imports required for this snippet to compile.")
+    compiles_successfully: bool = Field(..., description="Self-reported status before reaching the Unit Tester.")
+    notes: Optional[str] = None
+
+class RecoveryPlan(BaseModel):
+    analysis: str = Field(..., description="Explanation of why the implementation failed based on the error logs.")
+    revised_purpose: str = Field(..., description="A newly adjusted purpose/instruction to help the Worker succeed.")
+    requires_architecture_change: bool = Field(..., description="True only if the component fundamentally cannot be built as requested.")
+
+class SystemArchitecture(BaseModel):
     project_name: str
-    tasks: List[TaskNode]
+    description: str
+    components: List[str] = Field(..., description="List of major module/component names to be built.")
+    architecture_notes: str = Field(..., description="High-level rules, frameworks, or database choices.")

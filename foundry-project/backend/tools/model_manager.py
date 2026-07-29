@@ -1,45 +1,93 @@
-import httpx
-from openai import AsyncOpenAI
+# foundry-project/backend/tools/model_manager.py
+import json
+import asyncio
+from typing import Type, Any, Optional
+from pydantic import BaseModel
+import ollama
+
+# Hardcoded model pipeline
+BOSS_MODEL = "llama3.1:70b-instruct-q2_K"
+WORKER_MODEL = "qwen2.5-coder:14b-instruct-q8_0"
+SUPERVISOR_MODEL = "gemma2:27b"
 
 class ModelManager:
-    def __init__(self, host: str = "http://127.0.0.1:11434"):
-        self.host = host
-        self.generate_endpoint = f"{self.host}/api/generate"
-        self.llm = AsyncOpenAI(
-            base_url="http://localhost:11434/v1",
-            api_key="ollama"
+    """
+    Handles asynchronous API calls to the local Ollama instances, 
+    enforcing Pydantic schemas via JSON mode for deterministic pipelines.
+    """
+    
+    @staticmethod
+    async def generate_structured_output(
+        model_name: str, 
+        prompt: str, 
+        schema_model: Type[BaseModel],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.1
+    ) -> BaseModel:
+        """
+        Forces the LLM to output valid JSON matching the provided Pydantic schema.
+        """
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+            
+        # Inject the schema into the prompt to guide the model's generation
+        schema_json = schema_model.model_json_schema()
+        instruction = (
+            f"{prompt}\n\n"
+            f"You MUST respond with RAW JSON that exactly matches this schema:\n"
+            f"{json.dumps(schema_json, indent=2)}\n\n"
+            "Do not include markdown blocks, greetings, or explanations. Just the JSON."
+        )
+        messages.append({"role": "user", "content": instruction})
+
+        client = ollama.AsyncClient()
+        response = await client.chat(
+            model=model_name,
+            messages=messages,
+            format="json",
+            options={"temperature": temperature} 
         )
 
-    async def unload_model(self, model_name: str):
-        """Forces Ollama to drop the model from VRAM."""
-        print(f"[ModelManager] Unloading '{model_name}' from VRAM...")
-        async with httpx.AsyncClient() as client:
-            try:
-                # Setting keep_alive to 0 immediately unloads the model
-                await client.post(self.generate_endpoint, json={
-                    "model": model_name,
-                    "keep_alive": 0
-                })
-                print(f"[ModelManager] Successfully unloaded '{model_name}'.")
-            except Exception as e:
-                print(f"[ModelManager] Failed to unload model: {e}")
-
-    async def preload_model(self, model_name: str):
+        raw_content = response['message']['content']
+        
         try:
-            print(f"[ModelManager] Pre-loading '{model_name}' into VRAM...")
-            # Send a tiny prompt to force Ollama to load the model into VRAM
-            await self.llm.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1
-            )
-            print(f"[ModelManager] Successfully preloaded '{model_name}'.")
+            # Parse and validate the response against the exact Pydantic schema
+            parsed_data = json.loads(raw_content)
+            return schema_model.model_validate(parsed_data)
+            
+        except json.JSONDecodeError as e:
+            # In our event bus, this will trigger a localized Level 1 Retry
+            raise ValueError(f"[{model_name}] failed to return valid JSON. Payload: {raw_content}") from e
         except Exception as e:
-            print(f"[ModelManager] Failed to preload model: {e}")
+            raise ValueError(f"[{model_name}] Schema validation failed: {str(e)}") from e
 
-    async def switch_models(self, model_to_unload: str, model_to_load: str):
-        """Convenience method to swap models efficiently."""
-        if model_to_unload:
-            await self.unload_model(model_to_unload)
-        if model_to_load:
-            await self.preload_model(model_to_load)
+    @classmethod
+    async def run_boss(cls, prompt: str, schema: Type[BaseModel]) -> BaseModel:
+        return await cls.generate_structured_output(
+            model_name=BOSS_MODEL,
+            prompt=prompt,
+            schema_model=schema,
+            system_prompt="You are the Chief Software Architect. You define systems but never write implementation logic.",
+            temperature=0.3 # Slightly higher for architectural creativity
+        )
+
+    @classmethod
+    async def run_worker(cls, prompt: str, schema: Type[BaseModel]) -> BaseModel:
+        return await cls.generate_structured_output(
+            model_name=WORKER_MODEL,
+            prompt=prompt,
+            schema_model=schema,
+            system_prompt="You are a precise implementation specialist. You satisfy function contracts exactly as requested.",
+            temperature=0.0 # Zero temperature for maximum deterministic syntax
+        )
+
+    @classmethod
+    async def run_supervisor(cls, prompt: str, schema: Type[BaseModel]) -> BaseModel:
+        return await cls.generate_structured_output(
+            model_name=SUPERVISOR_MODEL,
+            prompt=prompt,
+            schema_model=schema,
+            system_prompt="You are a strict, senior code reviewer looking for edge cases, memory leaks, and logic flaws.",
+            temperature=0.1
+        )

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Software Factory - Control Center</title>
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 250px; background: #161b22; border-right: 1px solid #30363d; padding: 10px; display: flex; flex-direction: column; }
+        #main-content { flex: 1; display: flex; flex-direction: column; }
+        #top-panel { flex: 1; display: flex; border-bottom: 1px solid #30363d; }
+        #visualization { flex: 1; padding: 10px; border-right: 1px solid #30363d; }
+        #editor-container { flex: 1; }
+        #terminal { height: 250px; background: #010409; font-family: 'Courier New', Courier, monospace; overflow-y: auto; padding: 10px; border-top: 1px solid #30363d; }
+        .log-entry { margin-bottom: 5px; font-size: 13px; }
+        .log-info { color: #58a6ff; }
+        .log-success { color: #3fb950; }
+        .log-error { color: #f85149; }
+    </style>
+</head>
+<body>
+
+    <!-- Project Explorer & Controls -->
+    <div id="sidebar">
+        <h3>Job Management</h3>
+        <button onclick="startJob()">Start New Project</button>
+        <hr style="border-color: #30363d; width: 100%;">
+        <h4>Project Explorer</h4>
+        <div id="file-tree">
+            <!-- Populated via API -->
+        </div>
+    </div>
+
+    <div id="main-content">
+        <div id="top-panel">
+            <!-- Live Pipeline Visualization (Mermaid.js goes here) -->
+            <div id="visualization">
+                <h3>Pipeline Status</h3>
+                <div class="mermaid">
+                    graph TD;
+                        Boss-->Architecture;
+                        Architecture-->Workers;
+                        Workers-->Integrator;
+                </div>
+            </div>
+            
+            <!-- Monaco Editor (Generated Code Inspection) -->
+            <div id="editor-container"></div>
+        </div>
+
+        <!-- Live Telemetry Logs -->
+        <div id="terminal" id="log-console">
+            <div class="log-entry log-info">[SYSTEM] Awaiting WebSocket connection...</div>
+        </div>
+    </div>
+
+    <!-- Scripts for UI rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+
+        // WebSocket Connection for Live Logs
+        const ws = new WebSocket("ws://localhost:8000/ws/telemetry");
+        
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const terminal = document.getElementById("terminal");
+            
+            const logElement = document.createElement("div");
+            logElement.className = "log-entry " + (data.event_type === "Error" ? "log-error" : "log-info");
+            logElement.innerText = `[${data.timestamp}] [${data.event_type}] ${JSON.stringify(data.payload)}`;
+            
+            terminal.appendChild(logElement);
+            terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
+        };
+    </script>
+</body>
+</html>

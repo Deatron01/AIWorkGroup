@@ -91,3 +91,18 @@ def archive_workspace(files_to_archive: list = None) -> str:
             return f"Successfully archived {count} items from workspace to {run_archive_dir}"
     except Exception as e:
         return f"Error archiving workspace: {str(e)}"
+
+class FileOps:
+    """Wrapper class to maintain compatibility with agent nodes."""
+    
+    def write_file(self, filename: str, content: str, base_path: str = None) -> str:
+        return write_file(filename, content, base_path)
+        
+    def read_file(self, filename: str, base_path: str = None) -> str:
+        return read_file(filename, base_path)
+        
+    def list_workspace(self, base_path: str = None) -> list:
+        return list_workspace(base_path)
+        
+    def archive_workspace(self, files_to_archive: list = None) -> str:
+        return archive_workspace(files_to_archive)
