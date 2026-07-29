@@ -10,7 +10,7 @@ from core.dag_tracker import DAGTracker
 from agents.boss import BossPlanner
 from agents.worker import AsyncWorkerNode 
 from agents.supervisor import Supervisor
-
+from startup import ensure_models_loaded
 from tools.model_manager import ModelManager
 
 ollama_client = AsyncOpenAI(
@@ -18,8 +18,9 @@ ollama_client = AsyncOpenAI(
     api_key="ollama"
 )
 
-BOSS_MODEL = "llama3.1:8b"
-WORKER_MODEL = "qwen2.5-coder:7b"
+BOSS_MODEL = "llama3.1:70b-instruct-q2_K" 
+WORKER_MODEL = "qwen2.5-coder:14b-instruct-q8_0"
+SUPERVISOR_MODEL = "gemma2:27b"
 model_manager = ModelManager()
 
 # Initialize globals
@@ -69,6 +70,9 @@ async def start_project(request: ProjectRequest):
 
 
 async def main():
+    # 0. Run the pre-flight checks and download missing models
+    await ensure_models_loaded()
+    
     # 1. Initialize core system
     print("Starting Docker sandbox environment...")
     sandbox.start()

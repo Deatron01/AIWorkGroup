@@ -4,26 +4,25 @@ import re
 from tools.file_ops import list_workspace, read_file, archive_workspace, write_file
 
 class BossPlanner:
-    def __init__(self, llm_client, model_name: str = "llama3.1:8b"):
-        """
-        llm_client: AsyncOpenAI instance pointing to Ollama (e.g., http://127.0.0.1:11434/v1)
-        model_name: Local model to execute the architecture planning.
-        """
+    def __init__(self, llm_client, model_name: str = "llama3.1:70b-instruct-q2_K"):
         self.llm = llm_client
         self.model = model_name
 
     async def _call_llm(self, system_prompt: str, user_content: str, json_mode: bool = False) -> str:
-        """Wrapper for OpenAI-compatible Ollama API call."""
         kwargs = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            "temperature": 0.2
+            "temperature": 0.4,
+            "extra_body": {
+                "options": {
+                    "num_ctx": 8192
+                }
+            }
         }
         
-        # Enforce JSON mode natively in Ollama/OpenAI API
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 

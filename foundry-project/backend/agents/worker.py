@@ -19,8 +19,10 @@ sandbox = AsyncDockerSandbox("./workspace")
 git_manager = GitTransactionManager("./workspace")
 
 class AsyncWorkerNode:
-    def __init__(self, bus: EventBus):
+    def __init__(self, bus: EventBus, worker_model: str = "qwen2.5-coder:14b-instruct-q8_0", supervisor_model: str = "gemma2:27b"):
         self.bus = bus
+        self.worker_model = worker_model
+        self.supervisor_model = supervisor_model
 
     async def handle_ready_task(self, payload: Dict[str, Any]):
         task = payload["task"]
@@ -70,10 +72,19 @@ class AsyncWorkerNode:
             f"ERROR LOG:\n{error_log}"
         )
         
-        raw_output = await self._call_llm(sys_prompt, user_content)
+        response = await client.chat.completions.create(
+            model=self.worker_model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.1,
+            extra_body={"options": {"num_ctx": 16384}}
+        )
+        raw_output = response.choices[0].message.content
         return raw_output.replace("```python", "").replace("```", "").strip()
     
-    async def _run_llm_retry_loop(self, task, worktree_path: str, max_retries: int = 500) -> bool:
+    async def _run_llm_retry_loop(self, task, worktree_path: str, max_retries: int = 5) -> bool:
         if isinstance(task, dict):
             task_id = task.get("task_id")
             description = task.get("description")
@@ -151,9 +162,15 @@ class AsyncWorkerNode:
             try:
                 while not task_completed:
                     response = await client.chat.completions.create(
-                        model="qwen2.5-coder:7b",
+                        model=self.worker_model,
                         messages=messages, 
-                        tools=tools
+                        tools=tools,
+                        temperature=0.1,
+                        extra_body={
+                            "options": {
+                                "num_ctx": 16384
+                            }
+                        }
                     )
                     
                     message = response.choices[0].message
@@ -275,12 +292,17 @@ class AsyncWorkerNode:
 
                     # 3. Call the LLM to judge the code
                     review_response = await client.chat.completions.create(
-                        model="qwen2.5-coder:7b",
+                        model=self.supervisor_model,
                         messages=[
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_prompt}
                         ],
-                        temperature=0.1 # Keep it deterministic
+                        temperature=0.1,
+                        extra_body={
+                            "options": {
+                                "num_ctx": 8192
+                            }
+                        }
                     )
                     
                     raw_review = review_response.choices[0].message.content

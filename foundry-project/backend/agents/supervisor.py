@@ -4,12 +4,11 @@ import re
 from openai import AsyncOpenAI
 
 class Supervisor:
-    def __init__(self, sandbox, worker_agent, max_retries=3):
+    def __init__(self, sandbox, worker_agent=None, model_name: str = "gemma2:27b", max_retries=3):
         self.sandbox = sandbox
         self.worker = worker_agent
+        self.model_name = model_name
         self.max_retries = max_retries
-        
-        # Initialize the local LLM client for the Supervisor
         self.client = AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="local")
 
     async def execute_with_oversight(self, task_id: str, task_description: str, file_path: str, initial_code: str) -> bool:
@@ -43,12 +42,17 @@ class Supervisor:
             # 3. Call the LLM to judge the code
             try:
                 response = await self.client.chat.completions.create(
-                    model="qwen2.5-coder:7b", # Or llama3.1 depending on your local VRAM management
+                    model=self.model_name, # Updated to use gemma2:27b
                     messages=[
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.1 # Low temperature ensures deterministic, strict grading
+                    temperature=0.1,
+                    extra_body={
+                        "options": {
+                            "num_ctx": 8192
+                        }
+                    }
                 )
                 
                 # 4. Parse the JSON verdict safely

@@ -1,16 +1,12 @@
-# Use a slim Python image to save space and build time
+# Use a lightweight Python image
 FROM python:3.11-slim
 
-# Prevent Python from writing .pyc files and buffering stdout
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Install basic testing and system tools
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir pytest asyncio
 
-# Create a non-root workspace directory
+# Set the working directory where the AI will inject code
 WORKDIR /workspace
 
-# Install pytest and any other baseline testing/async tools you need
-RUN pip install --no-cache-dir pytest pytest-asyncio
-
-# The default command simply keeps the container alive so your 
-# AsyncDockerSandbox can execute commands inside it dynamically.
+# Keep the container alive indefinitely so the sandbox can execute commands inside it
 CMD ["tail", "-f", "/dev/null"]

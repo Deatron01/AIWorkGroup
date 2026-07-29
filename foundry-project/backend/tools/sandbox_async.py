@@ -4,7 +4,7 @@ import asyncio
 
 class AsyncDockerSandbox:
     # Updated default image to the custom testing container
-    def __init__(self, workspace_path: str, image: str = "mimir-tester:latest"):
+    def __init__(self, workspace_path: str, image: str = "foundry:latest"):
         self.client = docker.from_env()
         self.workspace_path = os.path.abspath(workspace_path)
         self.image = image
@@ -17,10 +17,10 @@ class AsyncDockerSandbox:
             self.client.images.get(self.image)
         except docker.errors.ImageNotFound:
             # Prevent Docker SDK from trying to pull a local image from the web
-            if "mimir-tester" in self.image:
+            if "foundry" in self.image:
                 raise RuntimeError(
                     f"Local image '{self.image}' not found! "
-                    "Run 'docker build -t mimir-tester:latest .' first."
+                    "Run 'docker build -t foundry:latest .' first."
                 )
             self.client.images.pull(self.image)
 
